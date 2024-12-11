@@ -3,7 +3,7 @@ name: Create a New Release
 on:
   push:
     branches:
-      - none # Automatically changes to main after first push
+      - main
 
   release:
     # Prevent the workflow from running on commits made by the GitHub Actions bot
@@ -29,7 +29,7 @@ on:
       # 3. Zip package
       - name: Zip Worker folder
         run: | #! Default package name is the repository name, change it if needed
-          zip -r <<{repo_name}>>.zip src/<<{repo_name}>>/ 
+          zip -r test-repo.zip src/test-repo/ 
 
       # 4. Install Poetry
       - name: Install Poetry

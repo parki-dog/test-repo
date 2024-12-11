@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "<<{repo_name}>>"
+name = "test-repo"
 version = "0.1.0"
 description = "Description of the project"
 authors = ["Your Name <you@example.com>"]
