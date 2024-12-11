@@ -1,0 +1,30 @@
+name: Rename the project from template
+
+on: [push]
+
+permissions: write-all
+
+jobs:
+  rename-project:
+    if: ${{ !contains (github.repository, '-template') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          # by default, it uses a depth of 1
+          # this fetches all history so that we can read each commit
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.Workflow_PAT }}
+
+      - name: Rename the project
+        run: |
+          echo "Configuring repository ${{ github.repository }}"
+          chmod +x .github/scripts/rename.sh
+          .github/scripts/rename.sh -r "${{ github.repository }}"
+              
+      - uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "✅ Ready to clone and code."
+          # commit_options: '--amend --no-edit'
+          push_options: --force

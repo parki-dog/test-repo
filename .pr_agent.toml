@@ -1,0 +1,5 @@
+[config]
+# models
+model="o1-mini"
+model_turbo="o1-mini"
+fallback_models=["o1-mini"]

@@ -1,0 +1,208 @@
+name: Create a New Release
+
+on:
+  push:
+    branches:
+      - none # Automatically changes to main after first push
+
+  release:
+    # Prevent the workflow from running on commits made by the GitHub Actions bot
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      # 1. Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Ensures that all git history is fetched, necessary for tagging
+
+      # 2. Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'  # Ensure this matches your project's Python version
+
+      # 3. Zip package
+      - name: Zip Worker folder
+        run: | #! Default package name is the repository name, change it if needed
+          zip -r <<{repo_name}>>.zip src/<<{repo_name}>>/ 
+
+      # 4. Install Poetry
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "${HOME}/.local/bin" >> $GITHUB_PATH  # Adds Poetry to PATH
+
+      # 5. Install project dependencies without installing the package itself
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      # 6. Set up Git to fetch all branches
+      - name: Fetch All Branches
+        run: git fetch --all
+
+      # 7. Identify the previous commit on main before the current push
+      - name: Get Previous Main Commit
+        id: get_prev_main
+        run: |
+          # Get the commit SHA before the latest push to main
+          PREV_MAIN=$(git rev-parse HEAD^)
+          PREV_MAIN_DATE=$(git show -s --format=%ci ${PREV_MAIN})
+          echo "Previous main commit: ${PREV_MAIN}"
+          echo "Previous main commit date: ${PREV_MAIN_DATE}"
+          echo "PREV_MAIN=${PREV_MAIN}" >> $GITHUB_ENV
+          echo "PREV_MAIN_DATE=${PREV_MAIN_DATE}" >> $GITHUB_ENV
+
+      # 8. List merged PRs into dev since the previous main commit
+      - name: List Merged PRs into Dev
+        id: list_prs
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: closed_prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              base: 'dev',
+              sort: 'updated',
+              direction: 'desc',
+            });
+
+            const prevMainDate = new Date(process.env.PREV_MAIN_DATE);
+            const prs = closed_prs
+              .filter(pr => new Date(pr.merged_at) > prevMainDate)
+              .map(pr => ({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels }));
+
+            console.log(`Found ${prs.length} PRs merged into dev since ${process.env.PREV_MAIN_DATE}`);
+
+            return prs;
+            
+      # 6. Get Version Bump from PR Labels or Description
+      - name: Determine Version Bump
+        id: determine_bump
+        uses: actions/github-script@v6
+        with:
+          script: |
+    
+            // Find all PRs merged in this push
+            const pullRequests = ${{ steps.list_prs.outputs.result }};
+    
+            // Initialize bump type
+            let bumpType = 'patch';
+    
+            // Helper function to extract bump type from description
+            const extractBumpFromDescription = (description) => {
+              if (!description) return null;  // Add null check
+              // Define regex patterns for each Type of Change section
+              const majorSectionRegex = /###\s*Major([\s\S]*?)(###|$)/i;
+              const minorSectionRegex = /###\s*Minor([\s\S]*?)(###|$)/i;
+              const patchSectionRegex = /###\s*Patch([\s\S]*?)(###|$)/i;
+
+              // Function to check if any checkbox is checked within a section
+              const isAnyCheckboxChecked = (section) => {
+                return /\- \[x\]/i.test(section);
+              };
+
+              // Extract and evaluate the Major section
+              const majorMatch = description.match(majorSectionRegex);
+              if (majorMatch && isAnyCheckboxChecked(majorMatch[1])) {
+                return 'major';
+              }
+
+              // Extract and evaluate the Minor section
+              const minorMatch = description.match(minorSectionRegex);
+              if (minorMatch && isAnyCheckboxChecked(minorMatch[1])) {
+                return 'minor';
+              }
+
+              // Extract and evaluate the Patch section
+              const patchMatch = description.match(patchSectionRegex);
+              if (patchMatch && isAnyCheckboxChecked(patchMatch[1])) {
+                return 'patch';
+              }
+
+              // Default to null if no relevant sections are found or no checkboxes are checked
+              return null;
+            };
+
+    
+            // Determine the highest bump required from labels or description
+            for (const pr of pullRequests) {
+              const labels = pr.labels.map(label => label.name.toLowerCase());
+              if (labels.includes('major')) {
+                bumpType = 'major';
+                break;  // Highest bump found
+              } else if (labels.includes('minor') && bumpType !== 'major') {
+                bumpType = 'minor';
+              } else if (labels.includes('patch') && bumpType === 'patch') {
+                bumpType = 'patch';
+              } else {
+                // If no relevant labels, attempt to extract from description
+                const descBump = extractBumpFromDescription(pr.body);
+                if (descBump === 'major') {
+                  bumpType = 'major';
+                  break;
+                } else if (descBump === 'minor' && bumpType !== 'major') {
+                  bumpType = 'minor';
+                } else if (descBump === 'patch' && bumpType === 'patch') {
+                  bumpType = 'patch';
+                }
+              }
+            }
+    
+            console.log(`Determined version bump: ${bumpType}`);
+            return bumpType;
+
+
+      # 7. Bump Version Using Poetry
+      - name: Bump Version
+        id: bump_version
+        run: |
+          BUMP=${{ steps.determine_bump.outputs.result }}
+          echo "Bumping version: $BUMP"
+          poetry version $BUMP
+          NEW_VERSION=$(poetry version -s)
+          echo "New version: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      # 8. Commit and Push Version Bump
+      - name: Commit Version Bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "chore: bump version to ${{ steps.bump_version.outputs.new_version }}"
+          git push origin main
+
+      # 9. Create Git Tag
+      - name: Create Git Tag
+        id: create_tag
+        run: |
+          NEW_TAG="v${{ steps.bump_version.outputs.new_version }}"
+          git tag $NEW_TAG
+          git push origin $NEW_TAG
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      # 10. Build the project using Poetry
+      - name: Build package
+        run: poetry build
+
+      # 11. Create a GitHub Release and upload the built artifacts
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/ppfl_santanna_worker-*.whl
+            dist/ppfl_santanna_worker-*.tar.gz
+            worker.zip
+            README.md
+          tag_name: ${{ steps.create_tag.outputs.new_tag }}
+          name: Release ${{ steps.create_tag.outputs.new_tag }}
+          body: |
+            Automated release generated by GitHub Actions.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
